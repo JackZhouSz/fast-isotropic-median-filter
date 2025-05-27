@@ -1,0 +1,77 @@
+* Requirements
+
+Building these files requires the following packages:
+
+-   Abseil (known compatible with Jan 2025 LTS branch)
+-   OpenCV (known compatible with OpenCV 4.6.0)
+
+For GPU builds only:
+
+-   CUDA   (known compatible with version 12.8)
+
+* Building
+
+Edit the Makefile to set paths to Abseil, OpenCV, and CUDA, and to your
+compiler. Then simply `make` to build the following targets:
+
+- run
+- test
+- benchmark
+
+* Running
+
+`run` takes an input image filename, a kernel radius, and a percentile value,
+and outputs the filtered image. If a corresponding mask exists alongside the
+input image (as e.g. "foo_mask.png"), the result will be composited through the
+mask; this can be used with the provided sample image "bongo.jpg" to recreate an
+image in the style of the paper's teaser figure. Example usage:
+
+./bin/run bongo.jpg 48 0.5
+
+This will apply a radius-48 circular median filter (percentile 0.5) to
+"bongo.jpg" and output the result. (In this case compositing through the mask,
+since "bongo_mask.png" is present.)
+
+* Testing
+
+The filter is data-dependent, so the test accepts an input image filename, which
+can be of nearly any type or bit depth. (E.g. 8-bit jpg, 16-bit png, 32-bit
+.exr.) The test will then run the percentile filter of that bit-depth with all
+radii in [1 .. 100] and a range of percentiles, and compares the result to a
+baseline reference implementation based on the algorithm of Huang et al. 1979.
+For floating-point inputs, the comparison will be against Huang's algorithm
+applied to a quantized 16-bit version of the input, adapted to the floating-
+point image's dynamic range. Example usage:
+
+./bin/test bongo.jpg
+
+* Benchmarking
+
+The filter's performance is also data dependent, so the benchmark accepts an
+input image filename. It also accepts a range of filter radii to test, as well
+as optionally the number of threads. (By default it will use std::thread::
+hardware_concurrency().) The output is shown in megapixels per second, where a
+megapixel is considered a grayscale megapixel; e.g. a 1000x1000 RGB image is
+considered 3 megapixels. It is also written to a .csv file. Example usage:
+
+./bin/benchmark --input_filename=bongo.jpg --radius_min=4 --radius_max=100 \
+    --radius_step=4 --num_channels=1 --num_threads=16
+
+If run with BENCHMARK_GPU = 1 (in benchmark.cc), the CUDA GPU implementation
+will also be benchmarked (on a single channel only), and its output will be
+validated for correctness against the CPU implementation.
+
+* Simple Implementation
+
+The "fast_isotropic_median_filter_simple" .cc and .h files contain a simplified
+"more readable" implementation of the algorithm. It operates on grayscale images
+only, without SIMD optimization, and is not intended to be performant; rather,
+it is intended to show how the various parts of the algorithm fit together.
+The "test" target runs this version against the optimized implementation to
+validate that they produce identical results.
+
+* Sample Images
+
+8-bit: bongo.jpg (Photo credit: Jenna McGrath)
+8-bit: fractal_8192.jpg (Image credit: Ben Weiss)
+16-bit: rincon.png (Photo credit: Ben Weiss)
