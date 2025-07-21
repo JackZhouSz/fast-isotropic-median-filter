@@ -60,7 +60,9 @@ class CudaGraySurface {
 
   // Reads the contents of the CUDA surface into the provided image.
   absl::Status Readback(WriteViewGray<T> image) const {
-    if (image.width() != width_ || image.height() != height_) {
+    const size_t image_width = image.width();
+    const size_t image_height = image.height();
+    if (image_width != width_ || image_height != height_) {
       return absl::InvalidArgumentError(
           "Image dimensions must match CUDA surface.");
     }
@@ -69,8 +71,8 @@ class CudaGraySurface {
         image.stride() * sizeof(T),      // Destination pitch
         base_,                           // Source CUDA array
         pitch_,                          // Pitch (in bytes)
-        image.width() * sizeof(T),       // Width of copy region (in bytes)
-        image.height(),                  // Height of copy region
+        image_width * sizeof(T),         // Width of copy region (in bytes)
+        image_height,                    // Height of copy region
         cudaMemcpyDeviceToHost);         // Kind of memory copy
 
     if (res != cudaSuccess) {

@@ -19,6 +19,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <string>
+#include <tuple>
 #include <type_traits>
 #include <vector>
 
@@ -134,9 +135,7 @@ uint16_t FindRank(const uint16_t* omnigram, int col, int row, int threshold,
   const uint16_t* histp = omnigram + pivot_val;
 
   if (direction == kSearchDownward) {
-    CHECK_GE(pivot_val, kPivotStep)
-        << ": col = " << col << ", rank = " << rank
-        << ", count_val = " << count_val << ", pivot_val = " << pivot_val;
+    CHECK_GE(pivot_val, kPivotStep);
     while (count_val >= rank) {
       for (int ind = -1; ind >= -kPivotStep; --ind) {
         count_val -= ValueInRange(histp[ind], col, row, threshold);
@@ -147,10 +146,7 @@ uint16_t FindRank(const uint16_t* omnigram, int col, int row, int threshold,
 
       pivot_val -= kPivotStep;
       histp -= kPivotStep;
-      CHECK_GT(pivot_val, 0)
-          << ": col = " << col << ", rank = " << rank
-          << ", count_val = " << count_val << ", pivot_val = " << pivot_val;
-
+      CHECK_GT(pivot_val, 0);
       *count_col_ptr = count_val;
       *pivot_col_ptr = pivot_val >> kOrdinalShift;
     }
@@ -502,9 +498,9 @@ void FastIsotropicMedianFilterOrdinal(
           const int dx = coords_x - (col + radius);
           const int dy = coords_y - radius;
           if (dx * dx + dy * dy <= threshold) --ct;
-          DCHECK_GE(ct, 0);
+          CHECK_GE(ct, 0);
         }
-        DCHECK(found);
+        CHECK(found);
         cardinal_output(col, 0) = ordinal_to_cardinal_lut[piv + ind];
         count[col] = ct;
       } else {  // 16-bit ordinal image.

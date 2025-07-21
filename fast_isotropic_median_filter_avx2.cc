@@ -13,6 +13,8 @@
 // limitations under the License.
 
 #ifdef __AVX2__
+
+#include <cpuid.h>
 #include <emmintrin.h>
 #include <immintrin.h>
 #include <popcntintrin.h>
@@ -432,7 +434,6 @@ inline void Transpose16x8Avx2(const uint16_t** srcs, int col, int row,
 }
 
 // Transposes 8 rows of 8 pixels pointed to by 'srcs + col' into 'dst + row'.
-// Also flips the sign bit, to facilitate signed comparisons later.
 inline void Transpose8x8Avx2(const uint16_t** srcs, int col, int row,
                              int stride, uint16_t* dst) {
   const __m128i* sp0 = reinterpret_cast<const __m128i*>(srcs[0] + col);
@@ -920,4 +921,5 @@ int StepHorizontalAvx2(const uint16_t* pixels_left,
 }
 }  // namespace internal
 }  // namespace fast_isotropic_median_filter
+
 #endif  // __AVX2__

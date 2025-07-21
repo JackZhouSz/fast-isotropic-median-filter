@@ -34,13 +34,13 @@ namespace {
 //     v = (v & ~0xFF) | (v & 0xF0) >> 4 | (v & 0x0F) << 4;
 // Note: the compiler seems unable to generate a 'rorb' instruction from C code,
 // and the performance impact is very significant, so assembly is required here.
-// NOLINTBEGIN(google3-runtime-inline-assembly): b/382732417
+// 
 template <typename T>
 static inline T HistIndex16(T v) {
   asm volatile("rorb $4, %b0" : "=r"(v) : "0"(v) :);
   return v;
 }
-// NOLINTEND(google3-runtime-inline-assembly): b/382732417
+// 
 
 // Converts vector {v0, v1, .., v15} to {0, v0, v0 + v1, v0 + v1 + v2, ...} in
 // 'prefix_sum', and 'v0 + .. + v15' in 'total_sum'.
@@ -279,15 +279,15 @@ static void UnpackSortedTuplesAvx2(
       v1 = _mm256_permutevar8x32_epi32(v1, vpermute);
       v2 = _mm256_permutevar8x32_epi32(v2, vpermute);
       v3 = _mm256_permutevar8x32_epi32(v3, vpermute);
-      __m256 c01 = _mm256_permute2x128_si256(v0, v1, 0x20);
-      __m256 c23 = _mm256_permute2x128_si256(v2, v3, 0x20);
-      __m256 v01 = _mm256_permute2x128_si256(v0, v1, 0x31);
-      __m256 v23 = _mm256_permute2x128_si256(v2, v3, 0x31);
+      __m256i c01 = _mm256_permute2x128_si256(v0, v1, 0x20);
+      __m256i c23 = _mm256_permute2x128_si256(v2, v3, 0x20);
+      __m256i v01 = _mm256_permute2x128_si256(v0, v1, 0x31);
+      __m256i v23 = _mm256_permute2x128_si256(v2, v3, 0x31);
       const __m256i v01_xor = _mm256_srli_epi32(_mm256_srai_epi32(v01, 30), 1);
       const __m256i v23_xor = _mm256_srli_epi32(_mm256_srai_epi32(v23, 30), 1);
       v01 = _mm256_xor_si256(v01, v01_xor);
       v23 = _mm256_xor_si256(v23, v23_xor);
-      __m256 c0123 = _mm256_packus_epi32(c01, c23);
+      __m256i c0123 = _mm256_packus_epi32(c01, c23);
       c0123 = _mm256_permute4x64_epi64(c0123, _MM_SHUFFLE(3, 1, 2, 0));
       _mm256_storeu_si256(vdst_values_ptr++, v01);
       _mm256_storeu_si256(vdst_values_ptr++, v23);

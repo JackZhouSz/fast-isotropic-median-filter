@@ -15,17 +15,17 @@
 #include <opencv2/opencv.hpp>
 #include <sys/types.h>
 
+#include <cstddef>
 #include <cstdint>
 #include <fstream>
 #include <iostream>
 #include <random>
-#include <regex>
 #include <string>
 
 #include "absl/flags/flag.h"
 #include "absl/flags/parse.h"
-#include "absl/flags/usage.h"
 #include "absl/log/check.h"
+#include "absl/log/initialize.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
@@ -35,19 +35,18 @@
 #include "fast_isotropic_median_filter.h"
 #include "image.h"
 
+// CPU benchmarking may be toggled on and off here.
+// Note: GPU benchmarking is specified in the Makefile.
 #define BENCHMARK_CPU 1
-
-#ifdef __APPLE__
-#define BENCHMARK_GPU 0  // Apple Silicon does not currently support CUDA.
-#else
-#define BENCHMARK_GPU 1
-#endif
 
 #if BENCHMARK_GPU
 #include "cuda_utils.h"
 #include "fast_isotropic_median_filter_cuda.cuh"
 #endif
 
+#ifdef __x86_64__
+#include <cpuid.h>
+#endif
 #ifdef __APPLE__
 #include <sys/sysctl.h>
 #endif
@@ -174,6 +173,144 @@ absl::Status ConstructImagesFromF(const cv::Mat& input_mat,
   return absl::OkStatus();
 }
 
+#ifdef __x86_64__
+std::string CpuFamily() {
+  std::string line;
+  std::ifstream cpuinfo("/proc/cpuinfo");
+  const std::string search_str = "model name";
+
+  if (cpuinfo.is_open()) {
+    while (std::getline(cpuinfo, line)) {
+      if (line.find(search_str) == 0) {
+        size_t colon_pos = line.find(':');
+        if (colon_pos != std::string::npos) {
+          std::string brand = line.substr(colon_pos + 1);
+          size_t first_char = brand.find_first_not_of(" \t");
+          if (first_char != std::string::npos) {
+            return brand.substr(first_char);
+          }
+        }
+      }
+    }
+    cpuinfo.close();
+  }
+  return "CPU brand not found";
+}
+
+std::string CpuGeneration() {
+  if (!__get_cpuid_max(0, nullptr)) {
+    return "CPUID not supported";
+  }
+
+  // Gets CPU vendor string.
+  std::vector<char> vendor(13);
+  unsigned int eax_0 = 0, ebx_0, ecx_0, edx_0;
+  __get_cpuid(0, &eax_0, &ebx_0, &ecx_0, &edx_0);
+  *reinterpret_cast<unsigned int*>(vendor.data()) = ebx_0;
+  *reinterpret_cast<unsigned int*>(vendor.data() + 4) = edx_0;
+  *reinterpret_cast<unsigned int*>(vendor.data() + 8) = ecx_0;
+  std::string vendor_str(vendor.data(), 12);
+
+  // Gets family and model Information.
+  unsigned int eax_1 = 1, ebx_1, ecx_1, edx_1;
+  __get_cpuid(1, &eax_1, &ebx_1, &ecx_1, &edx_1);
+
+  // Extracts raw family and model IDs.
+  const uint8_t family = (eax_1 >> 8) & 0xF;
+  const uint8_t model = (eax_1 >> 4) & 0xF;
+  const uint8_t ext_family = (eax_1 >> 20) & 0xFF;
+  const uint8_t ext_model = (eax_1 >> 16) & 0xF;
+
+  const uint32_t final_family = family == 0xF ? family + ext_family : family;
+  const uint32_t final_model =
+      (family == 0x6 || family == 0xF) ? model | (ext_model << 4) : model;
+  const uint32_t signature = (final_family << 8) | final_model;
+
+  if (vendor_str == "GenuineIntel") {
+    const std::map<uint32_t, std::string> intel_generations = {
+        {0x655, "Skylake / Cascade Lake / Cooper Lake"},
+        {0x66A, "Ice Lake-SP"},
+        {0x68C, "Tiger Lake"},
+        {0x68F, "Sapphire Rapids"},
+        {0x6AD, "Emerald Rapids"},
+        {0x6CF, "Granite Rapids"}};
+
+    auto it = intel_generations.find(signature);
+    if (it != intel_generations.end()) {
+      return it->second;
+    }
+  } else if (vendor_str == "AuthenticAMD") {
+    const std::map<uint32_t, std::string> amd_generations = {
+        {0x17, "Zen / Zen+"}, {0x19, "Zen 3 / Zen 4 / Zen 5"}};
+
+    if (final_family == 0x19) {
+      switch (final_model) {
+        // --- Zen 3 ---
+        case 0x01:
+          return "Zen 3 (Milan-X)";  // EPYC Server w/ 3D V-Cache
+        case 0x08:
+          return "Zen 3 (Chagall)";  // Ryzen Threadripper PRO 5000
+        case 0x21:
+          return "Zen 3 (Vermeer)";  // Ryzen 5000 Desktop
+        case 0x50:
+        case 0x51:
+        case 0x52:
+        case 0x53:
+        case 0x54:
+        case 0x55:
+          return "Zen 3 (Cezanne)";
+
+        // --- Zen 4 ---
+        case 0x11:
+          return "Zen 4 (Genoa)";  // EPYC Server
+        case 0x18:
+          return "Zen 4 (Genoa-X)";  // EPYC Server w/ 3D V-Cache
+        case 0x1A:
+          return "Zen 4 (Bergamo)";  // EPYC Cloud Native
+        case 0x61:
+          return "Zen 4 (Raphael)";  // Ryzen 7000 Desktop
+        case 0x74:
+          return "Zen 4 (Phoenix)";  // Ryzen 7040 Mobile APU
+        case 0x78:
+          return "Zen 4 (Hawk Point)";  // Ryzen 8040 Mobile APU
+        case 0xA1:
+        case 0xA2:
+        case 0xA3:
+        case 0xA4:
+          return "Zen 4 (Siena)";  // EPYC Edge/Telco
+
+        // --- Zen 5 ---
+        case 0x80:
+        case 0x81:
+          // Could be differentiated using L3 cache size here:
+          // Higher L3 -> Granite Ridge (Desktop)
+          // Lower L3  -> Strix Point (Mobile APU)
+          return "Zen 5 (Granite Ridge / Strix Point)";
+        case 0xC1:
+        case 0xC2:
+        case 0xC3:
+        case 0xC4:
+          return "Zen 5 (Turin)";  // EPYC Server
+
+        // Default for any unknown model in the family
+        default:
+          return "Unknown Zen Family 19h (Model: 0x" +
+                 std::to_string(final_model) + ")";
+      }
+    }
+
+    auto it = amd_generations.find(final_family);
+    if (it != amd_generations.end()) {
+      return it->second;
+    }
+  }
+
+  return "Unknown Generation (Vendor: " + vendor_str +
+         ", Family: " + std::to_string(final_family) +
+         ", Model: " + std::to_string(final_model) + ")";
+}
+#endif  // __x86_64__
+
 std::string GetCpuName() {
 #ifdef __APPLE__
   size_t len;
@@ -186,24 +323,32 @@ std::string GetCpuName() {
     return result;
   }
 #else
-  std::ifstream cpuinfo("/proc/cpuinfo");
-  std::string line;
-  std::regex modelNameRegex("model name\\s*:\\s*(.*)");
-  if (cpuinfo.is_open()) {
-    while (std::getline(cpuinfo, line)) {
-      std::smatch matches;
-      if (std::regex_search(line, matches, modelNameRegex) &&
-          matches.size() > 1) {
-        return matches[1].str();
-      }
-    }
-    cpuinfo.close();
-  }
+  return CpuFamily() + " " + CpuGeneration();
 #endif
   return "CPU name not found";
 }
 
 #if BENCHMARK_GPU
+bool IsGpuAvailable() {
+  int device_count = 0;
+  cudaError_t error = cudaGetDeviceCount(&device_count);
+  // If the driver API call fails or no devices are found, returns false.
+  if (error != cudaSuccess || device_count == 0) {
+    return false;
+  }
+  // Checks if any of the found devices meet our minimum requirements.
+  for (int i = 0; i < device_count; ++i) {
+    cudaDeviceProp props;
+    if (cudaGetDeviceProperties(&props, i) == cudaSuccess) {
+      if (props.major >= 7) {
+        return true;  // Found a compatible GPU.
+      }
+    }
+  }
+  // No devices met the minimum compute capability.
+  return false;
+}
+
 std::string GetGpuName() {
   int deviceId;
   cudaGetDevice(&deviceId);
@@ -266,9 +411,18 @@ int Benchmark(const std::string& input_filename, int radius_min, int radius_max,
          static_cast<int>(input_mat.elemSize1()) * 8);
   CsvLog(results, "# Radius range: min = %d, max = %d, step = %d\n", radius_min,
          radius_max, radius_step);
+
 #if BENCHMARK_GPU
-  CsvLog(results, "# Num Threads = %d, CPU = %s,,,GPU = %s\n", num_threads,
-         GetCpuName().c_str(), GetGpuName().c_str());
+  const bool gpu_is_available = IsGpuAvailable();
+  if (gpu_is_available) {
+    CsvLog(results, "# Num Threads = %d, CPU = %s,,,GPU = %s\n", num_threads,
+           GetCpuName().c_str(), GetGpuName().c_str());
+  } else {
+    CsvLog(results,
+           "# Num Threads = %d, CPU = %s,,,GPU = Not Available "
+           "(built for GPU but none found)\n",
+           num_threads, GetCpuName().c_str());
+  }
 #else
   CsvLog(results, "# Num Threads = %d, CPU = %s\n", num_threads,
          GetCpuName().c_str());
@@ -328,21 +482,26 @@ int Benchmark(const std::string& input_filename, int radius_min, int radius_max,
   CHECK_GE(output_width_cuda, 64);
   CHECK_GE(output_height_cuda, 64);
 
-  // Constructs CUDA output surfaces.
-  cudaError_t error;
-  CudaGraySurface<uint8_t> output8_surface_cuda(output_width_cuda,
-                                                output_height_cuda, &error);
-  CHECK_EQ(error, cudaSuccess);
-  CudaGraySurface<uint16_t> output16_surface_cuda(output_width_cuda,
-                                                  output_height_cuda, &error);
-  CHECK_EQ(error, cudaSuccess);
-  CudaGraySurface<float> outputf_surface_cuda(output_width_cuda,
-                                              output_height_cuda, &error);
-  CHECK_EQ(error, cudaSuccess);
-
   cudaStream_t stream = nullptr;
-  error = cudaStreamCreate(&stream);
-  CHECK_EQ(error, cudaSuccess);
+  std::unique_ptr<CudaGraySurface<uint8_t>> output8_surface_cuda;
+  std::unique_ptr<CudaGraySurface<uint16_t>> output16_surface_cuda;
+  std::unique_ptr<CudaGraySurface<float>> outputf_surface_cuda;
+
+  if (gpu_is_available) {
+    // Constructs CUDA output surfaces.
+    cudaError_t error;
+    output8_surface_cuda = std::make_unique<CudaGraySurface<uint8_t>>(
+        output_width_cuda, output_height_cuda, &error);
+    CHECK_EQ(error, cudaSuccess);
+    output16_surface_cuda = std::make_unique<CudaGraySurface<uint16_t>>(
+        output_width_cuda, output_height_cuda, &error);
+    CHECK_EQ(error, cudaSuccess);
+    outputf_surface_cuda = std::make_unique<CudaGraySurface<float>>(
+        output_width_cuda, output_height_cuda, &error);
+    CHECK_EQ(error, cudaSuccess);
+    error = cudaStreamCreate(&stream);
+    CHECK_EQ(error, cudaSuccess);
+  }
 #endif
 
   CsvLog(results, "Radius,8-bit MP/s,16-bit MP/s,float MP/s\n");
@@ -427,7 +586,7 @@ int Benchmark(const std::string& input_filename, int radius_min, int radius_max,
     float megapixels_per_sec_16_cuda = 0.0f;
     float megapixels_per_sec_f_cuda = 0.0f;
     // The CUDA implementation supports radii up to 96.
-    if (radius > 96) {
+    if (radius > 96 || !gpu_is_available) {
       // Logs combined results to file and console.
       CsvLog(results, "%d,%.6g,%.6g,%.6g,%.6g,%.6g,%.6g\n", radius,
              megapixels_per_sec_8, megapixels_per_sec_16, megapixels_per_sec_f,
@@ -477,7 +636,7 @@ int Benchmark(const std::string& input_filename, int radius_min, int radius_max,
       absl::Status status;
       int bytes_allocated = 0;
       FastIsotropicMedianFilterBuffers<uint8_t> buffers_cuda(
-          input8_surface_cuda, options_cuda, output8_surface_cuda, &status,
+          input8_surface_cuda, options_cuda, *output8_surface_cuda, &status,
           &bytes_allocated);
       if (!status.ok()) {
         std::cerr << "FastIsotropicMedianFilterBuffers error: " << status
@@ -491,7 +650,7 @@ int Benchmark(const std::string& input_filename, int radius_min, int radius_max,
       while (absl::ToDoubleSeconds(end - start) < kBenchmarkDurationSeconds) {
         auto status = FastIsotropicMedianFilter(input8_surface_cuda,
                                                 options_cuda, buffers_cuda,
-                                                output8_surface_cuda, stream);
+                                                *output8_surface_cuda, stream);
         cudaStreamSynchronize(stream);
         if (!status.ok()) {
           std::cerr << "FastIsotropicMedianFilter error: " << status
@@ -507,7 +666,7 @@ int Benchmark(const std::string& input_filename, int radius_min, int radius_max,
       // Reads back result from GPU to validate against CPU implementation.
       ImageGray<uint8_t> output8_cuda({output_width_cuda, output_height_cuda});
       ImageGray<uint8_t> output8_cpu({output_width_cuda, output_height_cuda});
-      status = output8_surface_cuda.Readback(output8_cuda.WriteView());
+      status = output8_surface_cuda->Readback(output8_cuda.WriteView());
       if (!status.ok()) {
         std::cerr << "Error reading back CUDA output: " << status << std::endl;
         break;
@@ -543,7 +702,7 @@ int Benchmark(const std::string& input_filename, int radius_min, int radius_max,
       absl::Status status;
       int bytes_allocated = 0;
       FastIsotropicMedianFilterBuffers<uint16_t> buffers_cuda(
-          input16_surface_cuda, options_cuda, output16_surface_cuda, &status,
+          input16_surface_cuda, options_cuda, *output16_surface_cuda, &status,
           &bytes_allocated);
       if (!status.ok()) {
         std::cerr << "FastIsotropicMedianFilterBuffers error: " << status
@@ -557,7 +716,7 @@ int Benchmark(const std::string& input_filename, int radius_min, int radius_max,
       while (absl::ToDoubleSeconds(end - start) < kBenchmarkDurationSeconds) {
         auto status = FastIsotropicMedianFilter(input16_surface_cuda,
                                                 options_cuda, buffers_cuda,
-                                                output16_surface_cuda, stream);
+                                                *output16_surface_cuda, stream);
         cudaStreamSynchronize(stream);
         if (!status.ok()) {
           std::cerr << "FastIsotropicMedianFilter error: " << status
@@ -574,7 +733,7 @@ int Benchmark(const std::string& input_filename, int radius_min, int radius_max,
       ImageGray<uint16_t> output16_cuda({output_width_cuda,
                                          output_height_cuda});
       ImageGray<uint16_t> output16_cpu({output_width_cuda, output_height_cuda});
-      status = output16_surface_cuda.Readback(output16_cuda.WriteView());
+      status = output16_surface_cuda->Readback(output16_cuda.WriteView());
       if (!status.ok()) {
         std::cerr << "Error reading back CUDA output: " << status << std::endl;
         break;
@@ -611,7 +770,7 @@ int Benchmark(const std::string& input_filename, int radius_min, int radius_max,
       absl::Status status;
       int bytes_allocated = 0;
       FastIsotropicMedianFilterBuffers<float> buffers_cuda(
-          inputf_surface_cuda, options_cuda, outputf_surface_cuda, &status,
+          inputf_surface_cuda, options_cuda, *outputf_surface_cuda, &status,
           &bytes_allocated);
       if (!status.ok()) {
         std::cerr << "FastIsotropicMedianFilterBuffers error: " << status
@@ -625,7 +784,7 @@ int Benchmark(const std::string& input_filename, int radius_min, int radius_max,
       while (absl::ToDoubleSeconds(end - start) < kBenchmarkDurationSeconds) {
         auto status = FastIsotropicMedianFilter(inputf_surface_cuda,
                                                 options_cuda, buffers_cuda,
-                                                outputf_surface_cuda, stream);
+                                                *outputf_surface_cuda, stream);
         cudaStreamSynchronize(stream);
         if (!status.ok()) {
           std::cerr << "FastIsotropicMedianFilter error: " << status
@@ -642,7 +801,7 @@ int Benchmark(const std::string& input_filename, int radius_min, int radius_max,
       ImageGray<float> outputf_cuda({output_width_cuda,
         output_height_cuda});
       ImageGray<float> outputf_cpu({output_width_cuda, output_height_cuda});
-      status = outputf_surface_cuda.Readback(outputf_cuda.WriteView());
+      status = outputf_surface_cuda->Readback(outputf_cuda.WriteView());
       if (!status.ok()) {
         std::cerr << "Error reading back CUDA output: " << status << std::endl;
         break;
@@ -695,6 +854,7 @@ int Benchmark(const std::string& input_filename, int radius_min, int radius_max,
 }  // namespace fast_isotropic_median_filter
 
 int main(int argc, char** argv) {
+  absl::InitializeLog();
   absl::ParseCommandLine(argc, argv);
 
   // Get the flag values.

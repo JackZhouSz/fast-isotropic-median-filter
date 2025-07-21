@@ -24,6 +24,7 @@
 
 #include "absl/log/check.h"
 #include "absl/log/log.h"
+#include "absl/status/status.h"
 #include "absl/types/span.h"
 #include "image.h"
 #include "ordinal_transform.h"
@@ -116,9 +117,7 @@ uint16_t FindRankScalar(const uint16_t* omnigram, int col, int row,
   const uint16_t* histp = omnigram + pivot_val;
 
   if (direction == kSearchDownward) {
-    CHECK_GE(pivot_val, kPivotStep)
-        << ": col = " << col << ", rank = " << rank
-        << ", count_val = " << count_val << ", pivot_val = " << pivot_val;
+    DCHECK_GE(pivot_val, kPivotStep);
     while (count_val >= rank) {
       for (int ind = -1; ind >= -kPivotStep; --ind) {
         count_val -= ValueInRange(histp[ind], col, row, threshold);
@@ -129,15 +128,12 @@ uint16_t FindRankScalar(const uint16_t* omnigram, int col, int row,
 
       pivot_val -= kPivotStep;
       histp -= kPivotStep;
-      CHECK_GT(pivot_val, 0)
-          << ": col = " << col << ", rank = " << rank
-          << ", count_val = " << count_val << ", pivot_val = " << pivot_val;
-
+      DCHECK_GT(pivot_val, 0);
       *count_col_ptr = count_val;
       *pivot_col_ptr = pivot_val >> kOrdinalShift;
     }
   } else {
-    CHECK_LE(pivot_val, 65536 - kPivotStep);
+    DCHECK_LE(pivot_val, 65536 - kPivotStep);
     while (count_val < rank) {
       for (int ind = 0; ind < kPivotStep; ++ind) {
         count_val += ValueInRange(histp[ind], col, row, threshold);
@@ -148,7 +144,7 @@ uint16_t FindRankScalar(const uint16_t* omnigram, int col, int row,
 
       pivot_val += kPivotStep;
       histp += kPivotStep;
-      CHECK_LT(pivot_val, 65536);
+      DCHECK_LT(pivot_val, 65536);
       *count_col_ptr = count_val;
       *pivot_col_ptr = pivot_val >> kOrdinalShift;
     }
@@ -175,7 +171,7 @@ template <typename ordinal_t>
 static void UpdateCountsScalar(ReadViewGray<ordinal_t> ordinal_input,
                                int radius, int row, const uint8_t* inset,
                                const ordinal_t* pivot, uint16_t* count) {
-#ifdef __x86_64__
+#ifdef __AVX2__
   constexpr int kFlip = std::is_same_v<ordinal_t, uint8_t> ? 0x80 : 0x8000;
 #else
   constexpr int kFlip = 0;
@@ -281,7 +277,7 @@ void SolveFirstPixel(ReadViewGrayU8 ordinal_input, int rank, int support,
                      absl::Span<const cardinal_t> ordinal_to_cardinal_lut,
                      uint8_t* pivot, uint16_t* count,
                      WriteViewGray<cardinal_t> cardinal_output, int col = 0) {
-#ifdef __x86_64__
+#ifdef __AVX2__
   constexpr int kFlip = 0x80;
 #else
   constexpr int kFlip = 0;
@@ -317,20 +313,23 @@ void SolveFirstPixel(ReadViewGrayU8 ordinal_input, int rank, int support,
   // output, since it was already written by the previous tile.
   const int threshold = internal::ThresholdForRadius(radius);
   if (use_simd) {
+    uint16_t ordinal_output;
 #if defined(__aarch64__)
-    const uint16_t ordinal_output = internal::SearchUpDownNeon(
+    ordinal_output = internal::SearchUpDownNeon(
         /*col=*/radius + col, /*row=*/radius, threshold, rank, omnigram,
         &pivot[col], &count[col]);
 #elif defined(__AVX2__)
-    const uint16_t ordinal_output =
-        use_pdep ? internal::SearchUpDownAvx2Pdep(
-                       /*col=*/radius + col, /*row=*/radius, threshold, rank,
-                       omnigram, &pivot[col], &count[col])
-                 : internal::SearchUpDownAvx2Popct(
-                       /*col=*/radius + col, /*row=*/radius, threshold, rank,
-                       omnigram, &pivot[col], &count[col]);
+    if (use_pdep) {
+      ordinal_output = internal::SearchUpDownAvx2Pdep(
+          /*col=*/radius + col, /*row=*/radius, threshold, rank, omnigram,
+          &pivot[col], &count[col]);
+    } else {
+      ordinal_output = internal::SearchUpDownAvx2Popct(
+          /*col=*/radius + col, /*row=*/radius, threshold, rank, omnigram,
+          &pivot[col], &count[col]);
+    }
 #else  // scalar
-    const uint16_t ordinal_output = SearchUpDownScalar(
+    ordinal_output = SearchUpDownScalar(
         /*col=*/radius + col, /*row=*/radius, threshold, rank, omnigram,
         &pivot[col], &count[col]);
 #endif
@@ -355,7 +354,7 @@ void SolveFirstPixel(ReadViewGrayU16 ordinal_input, int rank, int support,
                      absl::Span<const cardinal_t> ordinal_to_cardinal_lut,
                      uint16_t* pivot, uint16_t* count,
                      WriteViewGray<cardinal_t> cardinal_output, int col = 0) {
-#ifdef __x86_64__
+#ifdef __AVX2__
   constexpr int kFlip = 0x8000;
 #else
   constexpr int kFlip = 0;
@@ -416,7 +415,7 @@ void SolveFirstRow(ReadViewGray<ordinal_t> ordinal_input, int rank, int support,
   //                               count, cardinal_output, col);
   //     }
 
-#ifdef __x86_64__
+#ifdef __AVX2__
   constexpr int kFlip = std::is_same_v<ordinal_t, uint8_t> ? 0x80 : 0x8000;
 #else
   constexpr int kFlip = 0;
@@ -606,7 +605,7 @@ void FastIsotropicMedianFilterOrdinal(
     absl::Span<const cardinal_t> ordinal_to_cardinal_lut,
     const uint16_t* omnigram, const PixelOffset* first_row_offsets,
     PixelOffset* last_row_offsets, WriteViewGray<cardinal_t> cardinal_output) {
-#ifdef __x86_64__
+#ifdef __AVX2__
   constexpr int kFlip = std::is_same_v<ordinal_t, uint8_t> ? 0x80 : 0x8000;
 #else
   constexpr int kFlip = 0;
@@ -638,8 +637,8 @@ void FastIsotropicMedianFilterOrdinal(
   // updated as the ROI's sweep from top to bottom of the tile.
   // Note: the arrays are allocated with `alignas` to ensure 32-byte vector
   // alignment, required for certain AVX load and store instructions.
-  alignas(32) ordinal_t pivot[kMaxOutputCols] = {0};
-  alignas(32) uint16_t count[kMaxOutputCols] = {0};
+  alignas(64) ordinal_t pivot[kMaxOutputCols] = {0};
+  alignas(64) uint16_t count[kMaxOutputCols] = {0};
 
   // If solutions have been forwarded from previous tile, incorporates them.
   if (first_row_offsets != nullptr) {
@@ -782,17 +781,17 @@ int GetTargetOutputTileSize(int radius) {
       return radius <= 20   ? 56
              : radius <= 28 ? 80
              : radius <= 48 ? 96
-                            : 256 - 2 * radius;
+                            : std::min(128, 256 - 2 * radius);
     } else if constexpr (std::is_same_v<cardinal_t, uint16_t>) {
       return radius <= 20   ? 56
              : radius <= 28 ? 72
              : radius <= 52 ? 96
-                            : 256 - 2 * radius;
+                            : std::min(128, 256 - 2 * radius);
     } else {
       return radius <= 12   ? 72
              : radius <= 16 ? 96
              : radius <= 32 ? 128
-                            : 256 - 2 * radius;
+                            : std::min(128, 256 - 2 * radius);
     }
 #elif defined(__aarch64__)
     if constexpr (std::is_same_v<cardinal_t, uint8_t>) {
@@ -800,18 +799,18 @@ int GetTargetOutputTileSize(int radius) {
              : radius <= 32 ? 64
              : radius <= 44 ? 80
              : radius <= 56 ? 96
-                            : 256 - 2 * radius;
+                            : std::min(128, 256 - 2 * radius);
     } else if constexpr (std::is_same_v<cardinal_t, uint16_t>) {
       return radius <= 12   ? 80
              : radius <= 16 ? 96
              : radius <= 40 ? 112
-                            : 256 - 2 * radius;
+                            : std::min(128, 256 - 2 * radius);
     } else {
       return radius <= 8    ? 56
              : radius <= 12 ? 72
              : radius <= 16 ? 96
              : radius <= 32 ? 112
-                            : 256 - 2 * radius;
+                            : std::min(128, 256 - 2 * radius);
     }
 #else
     return 256 - 2 * radius;
@@ -824,8 +823,8 @@ void ProcessBlock(ReadViewGray<cardinal_t> input_block, int radius,
                   float percentile, int support, const uint8_t* inset,
                   int out_tile_size_y, bool use_simd,
                   WriteViewGray<cardinal_t> output_block) {
-  // Multiple of 32 bytes for SIMD friendliness.
-  constexpr int kTileWidthAlignment = 16 / sizeof(ordinal_t);
+  // Tile width aligned to half of maximum vector width for SIMD friendliness.
+  const int tile_width_alignment = 16 / sizeof(ordinal_t);
   const int output_block_height = output_block.height();
   // const int out_tile_size_y = in_tile_size_y - 2 * radius;
   const int in_tile_size_y = out_tile_size_y + 2 * radius;
@@ -835,10 +834,10 @@ void ProcessBlock(ReadViewGray<cardinal_t> input_block, int radius,
   ImageGray<cardinal_t> input_block_padded;
   ImageGray<cardinal_t> output_block_padded;
   bool needs_padding = false;
-  if (output_block.width() % kTileWidthAlignment != 0) {
+  if (output_block.width() % tile_width_alignment != 0) {
     needs_padding = true;
     const int pad =
-        kTileWidthAlignment - (output_block.width() % kTileWidthAlignment);
+        tile_width_alignment - (output_block.width() % tile_width_alignment);
     input_block_padded = ImageGray<cardinal_t>(input_block.width() + pad,
                                                input_block.height(), 0);
     output_block_padded = ImageGray<cardinal_t>(
@@ -873,14 +872,14 @@ void ProcessBlock(ReadViewGray<cardinal_t> input_block, int radius,
     // can be instantly extracted from it. Note that the span is padded by
     // kHistPad on either end to allow slight overshoot by the vector
     // inner loop which scans the array with a large stride. We allocate an
-    // extra 16 elements (32 bytes) to allow for SIMD alignment.
+    // extra 32 elements (64 bytes) to allow for SIMD alignment.
     std::vector<uint16_t> sorted_coords(
-        input_tile.width() * input_tile.height() + 2 * kHistPad + 16);
+        input_tile.width() * input_tile.height() + 2 * kHistPad + 32);
 
     // For the base pointer of the omnigram, we want to inset by kHistPad, but
-    // also align to a multiple of 32 bytes for optimal SIMD/AVX2 performance.
+    // also align to a multiple of 64 bytes for optimal SIMD/AVX2 performance.
     intptr_t base = reinterpret_cast<intptr_t>(&sorted_coords[kHistPad]);
-    base = (base + 31) & ~31;
+    base = (base + 63) & ~63;
     absl::Span<uint16_t> omnigram(reinterpret_cast<uint16_t*>(base),
                                   input_tile.width() * input_tile.height());
     internal::OrdinalTransform(
@@ -888,7 +887,7 @@ void ProcessBlock(ReadViewGray<cardinal_t> input_block, int radius,
         absl::Span<cardinal_t>(ordinal_to_cardinal_lut.data(),
                                input_tile.width() * input_tile.height()),
         omnigram);
-#ifdef __x86_64__
+#ifdef __AVX2__
     // Flips the top bit of each ordinal value.
     // TODO: Vectorize this.
     constexpr int kFlip = std::is_same_v<ordinal_t, uint16_t> ? 0x8000 : 0x80;
@@ -929,8 +928,7 @@ template <typename ordinal_t, typename cardinal_t>
 void FastIsotropicMedianFilterImpl(ReadViewPlanar<cardinal_t> input,
                                    float percentile, bool use_simd,
                                    WriteViewPlanar<cardinal_t> output) {
-  // Multiple of 32 bytes for SIMD friendliness.
-  constexpr int kTileWidthAlignment = 32 / sizeof(ordinal_t);
+  const int tile_width_alignment = 16 / sizeof(ordinal_t);
   const int input_width = input.width();
   const int input_height = input.height();
   const int output_width = output.width();
@@ -980,7 +978,7 @@ void FastIsotropicMedianFilterImpl(ReadViewPlanar<cardinal_t> input,
   }
 #endif
   out_tile_size_x =
-      std::min(out_tile_size_x, 256 - 2 * radius) & ~(kTileWidthAlignment - 1);
+      std::min(out_tile_size_x, 256 - 2 * radius) & ~(tile_width_alignment - 1);
   const int in_tile_size_x = out_tile_size_x + 2 * radius;
 
   // Loops through columns of tiles.
@@ -992,8 +990,8 @@ void FastIsotropicMedianFilterImpl(ReadViewPlanar<cardinal_t> input,
         FastCrop(output, col, 0, col + out_tile_size_x, output_height);
     // Tile widths, padded to ensure alignment.
     const int out_tile_width =
-        output_column.width() + (kTileWidthAlignment - 1) &
-        ~(kTileWidthAlignment - 1);
+        output_column.width() + (tile_width_alignment - 1) &
+        ~(tile_width_alignment - 1);
     const int in_tile_width = out_tile_width + 2 * radius;
 
     // Loops through vertical blocks of tiles, rather than entire columns. (The
@@ -1194,7 +1192,7 @@ namespace internal {
 void FastIsotropicMedianFilter(ReadViewPlanarU8 input, float percentile,
                                bool use_simd, WriteViewPlanarU8 output) {
   const int radius = (input.width() - output.width()) / 2;
-  if (radius >= 8 && radius <= kMaximumQuantizedRadiusU8) {
+  if (radius <= kMaximumQuantizedRadiusU8) {
     FastIsotropicMedianFilterImpl</*ordinal_t=*/uint8_t>(input, percentile,
                                                          use_simd, output);
   } else {
@@ -1202,10 +1200,11 @@ void FastIsotropicMedianFilter(ReadViewPlanarU8 input, float percentile,
                                                           use_simd, output);
   }
 }
+
 void FastIsotropicMedianFilter(ReadViewPlanarU16 input, float percentile,
                                bool use_simd, WriteViewPlanarU16 output) {
   const int radius = (input.width() - output.width()) / 2;
-  if (radius >= 8 && radius <= kMaximumQuantizedRadiusU16) {
+  if (radius <= kMaximumQuantizedRadiusU16) {
     FastIsotropicMedianFilterImpl</*ordinal_t=*/uint8_t>(input, percentile,
                                                          use_simd, output);
   } else {
@@ -1213,10 +1212,11 @@ void FastIsotropicMedianFilter(ReadViewPlanarU16 input, float percentile,
                                                           use_simd, output);
   }
 }
+
 void FastIsotropicMedianFilter(ReadViewPlanarF input, float percentile,
                                bool use_simd, WriteViewPlanarF output) {
   const int radius = (input.width() - output.width()) / 2;
-  if (radius >= 8 && radius <= kMaximumQuantizedRadiusFloat) {
+  if (radius <= kMaximumQuantizedRadiusFloat) {
     FastIsotropicMedianFilterImpl</*ordinal_t=*/uint8_t>(input, percentile,
                                                          use_simd, output);
   } else {
@@ -1224,6 +1224,7 @@ void FastIsotropicMedianFilter(ReadViewPlanarF input, float percentile,
                                                           use_simd, output);
   }
 }
+
 void BaselineIsotropicMedianFilter(ReadViewPlanarU8 input, float percentile,
                                    WriteViewPlanarU8 output) {
   CHECK_EQ(input.planes(), output.planes());
@@ -1233,6 +1234,7 @@ void BaselineIsotropicMedianFilter(ReadViewPlanarU8 input, float percentile,
     BaselineIsotropicMedianFilterImpl(input_ch, percentile, output_ch);
   }
 }
+
 void BaselineIsotropicMedianFilter(ReadViewPlanarU16 input, float percentile,
                                    WriteViewPlanarU16 output) {
   CHECK_EQ(input.planes(), output.planes());

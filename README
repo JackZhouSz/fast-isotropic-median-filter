@@ -18,6 +18,10 @@ compiler. Then simply `make` to build the following targets:
 - test
 - benchmark
 
+Note: recent versions of clang and nvcc may have a conflict involving 'sinpif'
+and 'cospif'. If you encounter this error, try the workaround described here:
+https://forums.developer.nvidia.com/t/error-exception-specification-is-incompatible-for-cospi-sinpi-cospif-sinpif-with-glibc-2-41/323591
+
 * Running
 
 `run` takes an input image filename, a kernel radius, and a percentile value,
@@ -54,8 +58,8 @@ hardware_concurrency().) The output is shown in megapixels per second, where a
 megapixel is considered a grayscale megapixel; e.g. a 1000x1000 RGB image is
 considered 3 megapixels. It is also written to a .csv file. Example usage:
 
-./bin/benchmark --input_filename=bongo.jpg --radius_min=4 --radius_max=100 \
-    --radius_step=4 --num_channels=1 --num_threads=16
+./bin/benchmark --input_filename=fractal_8192.jpg --radius_min=4 \
+    --radius_max=100  --radius_step=4 --num_channels=1 --num_threads=16
 
 If run with BENCHMARK_GPU = 1 (in benchmark.cc), the CUDA GPU implementation
 will also be benchmarked (on a single channel only), and its output will be
