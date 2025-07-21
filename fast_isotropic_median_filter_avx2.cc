@@ -27,6 +27,7 @@
 #include <sstream>
 #include <string>
 
+#include "absl/log/log.h"
 #include "absl/log/check.h"
 #include "absl/strings/match.h"
 #include "image.h"
@@ -562,6 +563,79 @@ bool UsePdep() {
 #else
   return false;  // TODO: implement this check for e.g. Windows.
 #endif
+}
+
+bool HasAvx512(bool* has_vbmi) {
+  if (has_vbmi != nullptr) *has_vbmi = false;
+
+  enum CpuIdLeaf : int {
+    kCpuidGetHighestFunctionParameter = 0x0,
+    kCpuidProcessorInfoAndFeatureBits = 0x1,
+    kCpuidExtendedFeaturesEax7Ecx0 = 0x7,
+  };
+  unsigned int eax = 0, ebx, ecx, edx;
+  unsigned int highest_basic_function = 0;
+
+  __get_cpuid(kCpuidGetHighestFunctionParameter, &eax, &ebx, &ecx, &edx);
+  highest_basic_function = eax;
+
+  if (highest_basic_function < kCpuidProcessorInfoAndFeatureBits) {
+    LOG(INFO) << "HasAvx512: CPU does not support CPUID leaf 0x1";
+    return false;
+  }
+
+  __cpuid_count(kCpuidExtendedFeaturesEax7Ecx0, 0, eax, ebx, ecx, edx);
+
+  // EDX contains feature flags for Leaf 0x7, Sub-leaf 0
+  // AVX512F (Foundation) is bit 16 of EBX
+  // AVX512DQ is bit 17 of EBX
+  // AVX512BW is bit 30 of EBX
+  // AVX512VL is bit 31 of EBX
+  // AVX512VBMI is bit 1 of ECX
+  constexpr unsigned int kEbxAvx512FBit = (1 << 16);
+  constexpr unsigned int kEbxAvx512DQBit = (1 << 17);
+  constexpr unsigned int kEbxAvx512BWBit = (1 << 30);
+  constexpr unsigned int kEbxAvx512VLBit = (1 << 31);
+  constexpr unsigned int kEcxAvx512VBMIBit = (1 << 1);
+  if ((ebx & kEbxAvx512FBit) && (ebx & kEbxAvx512DQBit) &&
+      (ebx & kEbxAvx512BWBit) && (ebx & kEbxAvx512VLBit)) {
+    if (ecx & kEcxAvx512VBMIBit) {
+      // E.g. Cannon Lake, Ice Lake +, Zen 4 +.
+      LOG(INFO) << "HasAvx512: CPU supports AVX512F, DQ, BW, VL, and VBMI";
+      if (has_vbmi != nullptr) *has_vbmi = true;
+    } else {
+      // E.g. Skylake, Cascade Lake, Cooper Lake.
+      LOG(INFO)
+          << "HasAvx512: CPU supports AVX512F, DQ, BW, and VL, but not VBMI";
+    }
+    return true;
+  }
+  LOG(INFO) << "HasAvx512: CPU does not support all of AVX512F, DQ, BW, and VL";
+  return false;
+}
+
+bool UseAvx512(bool* has_vbmi) {
+  static bool inited = false;
+  static bool has_avx512_cached = false;
+  static bool has_vbmi_cached = false;
+  if (inited) {
+    if (has_vbmi != nullptr) {
+      *has_vbmi = has_vbmi_cached;
+    }
+    return has_avx512_cached;
+  }
+  has_avx512_cached = HasAvx512(&has_vbmi_cached);
+  if (has_vbmi != nullptr) {
+    *has_vbmi = has_vbmi_cached;
+  }
+  inited = true;
+  return has_avx512_cached;
+}
+
+bool UseAvx512Vbmi() {
+  bool has_vbmi = false;
+  const bool has_avx512 = UseAvx512(&has_vbmi);
+  return has_avx512 && has_vbmi;
 }
 
 uint16_t SearchUpDownAvx2Pdep(int col, int row, int threshold, int rank,

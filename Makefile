@@ -26,6 +26,7 @@ TARGET_ARCH := $(shell uname -m)
 
 ifeq ($(TARGET_ARCH),x86_64)
   ARCH_FLAGS   = -mavx2 -mbmi -mbmi2
+  AVX512_FLAGS = -mavx512f -mavx512bw -mavx512dq -mavx512vl -mbmi -mbmi2
 else ifeq ($(filter aarch64 arm64,$(TARGET_ARCH)),$(TARGET_ARCH))
   TARGET_ARCH := aarch64
   ARCH_FLAGS  =
@@ -53,7 +54,7 @@ SRC_BENCHMARK             := benchmark.cc
 # Adds architecture-specific sources to the lists.
 ifeq ($(TARGET_ARCH),x86_64)
   SRC_ORD_TRANSFORM_CPU += ordinal_transform_avx2.cc
-  SRC_ISO_FILTER_CPU    += fast_isotropic_median_filter_avx2.cc
+  SRC_ISO_FILTER_CPU    += fast_isotropic_median_filter_avx2.cc fast_isotropic_median_filter_avx512.cc
 else ifeq ($(TARGET_ARCH),aarch64)
   SRC_ORD_TRANSFORM_CPU += ordinal_transform_neon.cc
   SRC_ISO_FILTER_CPU    += fast_isotropic_median_filter_neon.cc
@@ -154,6 +155,10 @@ $(LIB_FAST_ISOTROPIC_MEDIAN_FILTER_CUDA): $(OBJS_ISO_FILTER_CUDA) | $(LIB_DIR)
 endif
 
 # --- Compilation Rules ---
+# Rule for AVX-512 files, which need special flags.
+$(BIN_DIR)/fast_isotropic_median_filter_avx512.o: fast_isotropic_median_filter_avx512.cc | $(BIN_DIR)
+	$(CXX) $(CXXFLAGS) $(AVX512_FLAGS) $(INCLUDES) -c $< -o $@
+
 # Rule for compiling the benchmark source, which uses a conditional compiler.
 $(BIN_DIR)/benchmark.o: $(SRC_BENCHMARK) | $(BIN_DIR)
 	$(BENCHMARK_COMPILER) $(BENCHMARK_FLAGS) $(INCLUDES) -c $< -o $@

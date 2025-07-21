@@ -47,6 +47,8 @@ inline int ThresholdForRadius(int radius) {
 // where is has an extremely slow microcoded implementation. So we only use
 // 'pdep' on micro-architectures that implement it efficiently.
 bool UsePdep();
+bool UseAvx512(bool* has_vbmi = nullptr);
+bool UseAvx512Vbmi();
 #endif  // __AVX2__
 
 // Baseline slow implementation for correctness testing.
@@ -87,6 +89,33 @@ int StepHorizontalNeon(const uint16_t* pixels_left,
                        const uint16_t* pixels_right, int pivot_val,
                        int kernel_width_ceil);
 #elif defined(__AVX2__)
+// AVX512-specific methods.
+uint16_t SearchUpDownAvx512(int col, int row, int threshold, int rank,
+                            const uint16_t* histc, uint8_t* pivot_col_ptr,
+                            uint16_t* count_col_ptr);
+uint16_t SearchUpDownAvx512(int col, int row, int threshold, int rank,
+                            const uint16_t* histc, uint16_t* pivot_col_ptr,
+                            uint16_t* count_col_ptr);
+void UpdateCountsAvx512(ReadViewGrayU8 ordinal_input, int radius, int row,
+                        const uint8_t* inset, const uint8_t* pivot,
+                        uint16_t* count);
+void UpdateCountsAvx512(ReadViewGrayU16 ordinal_input, int radius, int row,
+                        const uint8_t* inset, const uint16_t* pivot,
+                        uint16_t* count);
+void TransposeFirstRowsAvx512(ReadViewGrayU8 ordinal_input, int radius,
+                              const uint8_t* inset, uint8_t* pixels_left,
+                              uint8_t* pixels_right);
+void TransposeFirstRowsAvx512(ReadViewGrayU16 ordinal_input, int radius,
+                              const uint8_t* inset, uint16_t* pixels_left,
+                              uint16_t* pixels_right);
+int StepHorizontalAvx512(const uint8_t* pixels_left,
+                         const uint8_t* pixels_right, int pivot_val,
+                         int kernel_width_ceil);
+int StepHorizontalAvx512(const uint16_t* pixels_left,
+                         const uint16_t* pixels_right, int pivot_val,
+                         int kernel_width_ceil);
+
+// AVX2-specific methods.
 uint16_t SearchUpDownAvx2Pdep(int col, int row, int threshold, int rank,
                               const uint16_t* histc, uint8_t* pivot_col_ptr,
                               uint16_t* count_col_ptr);

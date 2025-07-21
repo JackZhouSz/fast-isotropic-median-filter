@@ -172,7 +172,10 @@ static void UpdateCountsScalar(ReadViewGray<ordinal_t> ordinal_input,
                                int radius, int row, const uint8_t* inset,
                                const ordinal_t* pivot, uint16_t* count) {
 #ifdef __AVX2__
-  constexpr int kFlip = std::is_same_v<ordinal_t, uint8_t> ? 0x80 : 0x8000;
+  static const bool use_avx512 = internal::UseAvx512();
+  const int kFlip = use_avx512                           ? 0
+                    : std::is_same_v<ordinal_t, uint8_t> ? 0x80
+                                                         : 0x8000;
 #else
   constexpr int kFlip = 0;
 #endif
@@ -198,7 +201,14 @@ static void UpdateCounts(ReadViewGray<ordinal_t> ordinal_input, int radius,
     internal::UpdateCountsNeon(ordinal_input, radius, row, inset, pivot, count);
     return;
 #elif defined(__AVX2__)
-    internal::UpdateCountsAvx2(ordinal_input, radius, row, inset, pivot, count);
+    static const bool use_avx512 = internal::UseAvx512();
+    if (use_avx512) {
+      internal::UpdateCountsAvx512(ordinal_input, radius, row, inset, pivot,
+                                   count);
+    } else {
+      internal::UpdateCountsAvx2(ordinal_input, radius, row, inset, pivot,
+                                 count);
+    }
     return;
 #endif
   }
@@ -278,7 +288,8 @@ void SolveFirstPixel(ReadViewGrayU8 ordinal_input, int rank, int support,
                      uint8_t* pivot, uint16_t* count,
                      WriteViewGray<cardinal_t> cardinal_output, int col = 0) {
 #ifdef __AVX2__
-  constexpr int kFlip = 0x80;
+  static const bool use_avx512 = internal::UseAvx512();
+  const int kFlip = use_avx512 ? 0 : 0x80;
 #else
   constexpr int kFlip = 0;
 #endif
@@ -319,14 +330,21 @@ void SolveFirstPixel(ReadViewGrayU8 ordinal_input, int rank, int support,
         /*col=*/radius + col, /*row=*/radius, threshold, rank, omnigram,
         &pivot[col], &count[col]);
 #elif defined(__AVX2__)
-    if (use_pdep) {
-      ordinal_output = internal::SearchUpDownAvx2Pdep(
+    static const bool use_avx512 = internal::UseAvx512();
+    if (use_avx512) {
+      ordinal_output = internal::SearchUpDownAvx512(
           /*col=*/radius + col, /*row=*/radius, threshold, rank, omnigram,
           &pivot[col], &count[col]);
     } else {
-      ordinal_output = internal::SearchUpDownAvx2Popct(
-          /*col=*/radius + col, /*row=*/radius, threshold, rank, omnigram,
-          &pivot[col], &count[col]);
+      if (use_pdep) {
+        ordinal_output = internal::SearchUpDownAvx2Pdep(
+            /*col=*/radius + col, /*row=*/radius, threshold, rank, omnigram,
+            &pivot[col], &count[col]);
+      } else {
+        ordinal_output = internal::SearchUpDownAvx2Popct(
+            /*col=*/radius + col, /*row=*/radius, threshold, rank, omnigram,
+            &pivot[col], &count[col]);
+      }
     }
 #else  // scalar
     ordinal_output = SearchUpDownScalar(
@@ -355,7 +373,8 @@ void SolveFirstPixel(ReadViewGrayU16 ordinal_input, int rank, int support,
                      uint16_t* pivot, uint16_t* count,
                      WriteViewGray<cardinal_t> cardinal_output, int col = 0) {
 #ifdef __AVX2__
-  constexpr int kFlip = 0x8000;
+  static const bool use_avx512 = internal::UseAvx512();
+  const int kFlip = use_avx512 ? 0 : 0x8000;
 #else
   constexpr int kFlip = 0;
 #endif
@@ -416,7 +435,10 @@ void SolveFirstRow(ReadViewGray<ordinal_t> ordinal_input, int rank, int support,
   //     }
 
 #ifdef __AVX2__
-  constexpr int kFlip = std::is_same_v<ordinal_t, uint8_t> ? 0x80 : 0x8000;
+  static const bool use_avx512 = internal::UseAvx512();
+  const int kFlip = use_avx512                           ? 0
+                    : std::is_same_v<ordinal_t, uint8_t> ? 0x80
+                                                         : 0x8000;
 #else
   constexpr int kFlip = 0;
 #endif
@@ -447,8 +469,14 @@ void SolveFirstRow(ReadViewGray<ordinal_t> ordinal_input, int rank, int support,
     internal::TransposeFirstRowsNeon(ordinal_input, radius, inset,
                                      pixels_left.data(), pixels_right.data());
 #elif defined(__AVX2__)
-    internal::TransposeFirstRowsAvx2(ordinal_input, radius, inset,
-                                     pixels_left.data(), pixels_right.data());
+    if (use_avx512) {
+      internal::TransposeFirstRowsAvx512(ordinal_input, radius, inset,
+                                         pixels_left.data(),
+                                         pixels_right.data());
+    } else {
+      internal::TransposeFirstRowsAvx2(ordinal_input, radius, inset,
+                                       pixels_left.data(), pixels_right.data());
+    }
 #else  // scalar
     TransposeFirstRowsScalar(ordinal_input, radius, inset, pixels_left.data(),
                              pixels_right.data());
@@ -469,8 +497,13 @@ void SolveFirstRow(ReadViewGray<ordinal_t> ordinal_input, int rank, int support,
       count_val += internal::StepHorizontalNeon(
           pixels_left_ptr, pixels_right_ptr, pivot_val, kernel_width_ceil);
 #elif defined(__AVX2__)
-      count_val += internal::StepHorizontalAvx2(
-          pixels_left_ptr, pixels_right_ptr, pivot_val, kernel_width_ceil);
+      if (use_avx512) {
+        count_val += internal::StepHorizontalAvx512(
+            pixels_left_ptr, pixels_right_ptr, pivot_val, kernel_width_ceil);
+      } else {
+        count_val += internal::StepHorizontalAvx2(
+            pixels_left_ptr, pixels_right_ptr, pivot_val, kernel_width_ceil);
+      }
 #else  // scalar
       for (int row = 0; row <= 2 * radius; ++row) {
         if ((pixels_left_ptr[row] ^ kFlip) < pivot_val) --count_val;
@@ -493,13 +526,20 @@ void SolveFirstRow(ReadViewGray<ordinal_t> ordinal_input, int rank, int support,
           col + radius, /*row=*/0 + radius, threshold, rank, omnigram,
           &pivot[col], &count[col]);
 #elif defined(__AVX2__)
-      ordinal_output = use_pdep
-                           ? internal::SearchUpDownAvx2Pdep(
-                                 col + radius, /*row=*/0 + radius, threshold,
-                                 rank, omnigram, &pivot[col], &count[col])
-                           : internal::SearchUpDownAvx2Popct(
-                                 col + radius, /*row=*/0 + radius, threshold,
-                                 rank, omnigram, &pivot[col], &count[col]);
+      static const bool use_avx512 = internal::UseAvx512();
+      if (use_avx512) {
+        ordinal_output = internal::SearchUpDownAvx512(
+            col + radius, /*row=*/0 + radius, threshold, rank, omnigram,
+            &pivot[col], &count[col]);
+      } else {
+        ordinal_output = use_pdep
+                             ? internal::SearchUpDownAvx2Pdep(
+                                   col + radius, /*row=*/0 + radius, threshold,
+                                   rank, omnigram, &pivot[col], &count[col])
+                             : internal::SearchUpDownAvx2Popct(
+                                   col + radius, /*row=*/0 + radius, threshold,
+                                   rank, omnigram, &pivot[col], &count[col]);
+      }
 #else  // scalar
       ordinal_output =
           SearchUpDownScalar(col + radius, /*row=*/0 + radius, threshold, rank,
@@ -606,7 +646,10 @@ void FastIsotropicMedianFilterOrdinal(
     const uint16_t* omnigram, const PixelOffset* first_row_offsets,
     PixelOffset* last_row_offsets, WriteViewGray<cardinal_t> cardinal_output) {
 #ifdef __AVX2__
-  constexpr int kFlip = std::is_same_v<ordinal_t, uint8_t> ? 0x80 : 0x8000;
+  static const bool use_avx512 = internal::UseAvx512();
+  const int kFlip = use_avx512                           ? 0
+                    : std::is_same_v<ordinal_t, uint8_t> ? 0x80
+                                                         : 0x8000;
 #else
   constexpr int kFlip = 0;
 #endif
@@ -823,8 +866,13 @@ void ProcessBlock(ReadViewGray<cardinal_t> input_block, int radius,
                   float percentile, int support, const uint8_t* inset,
                   int out_tile_size_y, bool use_simd,
                   WriteViewGray<cardinal_t> output_block) {
+#ifdef __AVX2__
   // Tile width aligned to half of maximum vector width for SIMD friendliness.
+  static const bool use_avx_512 = internal::UseAvx512();
+  const int tile_width_alignment = use_avx_512 ? 16 : 16 / sizeof(ordinal_t);
+#else
   const int tile_width_alignment = 16 / sizeof(ordinal_t);
+#endif
   const int output_block_height = output_block.height();
   // const int out_tile_size_y = in_tile_size_y - 2 * radius;
   const int in_tile_size_y = out_tile_size_y + 2 * radius;
@@ -888,12 +936,15 @@ void ProcessBlock(ReadViewGray<cardinal_t> input_block, int radius,
                                input_tile.width() * input_tile.height()),
         omnigram);
 #ifdef __AVX2__
-    // Flips the top bit of each ordinal value.
-    // TODO: Vectorize this.
-    constexpr int kFlip = std::is_same_v<ordinal_t, uint16_t> ? 0x8000 : 0x80;
-    for (int y = 0; y < input_ordinal_cropped.height(); ++y) {
-      for (int x = 0; x < input_ordinal_cropped.width(); ++x) {
-        input_ordinal_cropped(x, y) ^= kFlip;
+    static const bool use_avx512 = internal::UseAvx512();
+    if (!use_avx512) {
+      // Flips the top bit of each ordinal value.
+      // TODO: Vectorize this.
+      constexpr int kFlip = std::is_same_v<ordinal_t, uint16_t> ? 0x8000 : 0x80;
+      for (int y = 0; y < input_ordinal_cropped.height(); ++y) {
+        for (int x = 0; x < input_ordinal_cropped.width(); ++x) {
+          input_ordinal_cropped(x, y) ^= kFlip;
+        }
       }
     }
 #endif
@@ -928,7 +979,12 @@ template <typename ordinal_t, typename cardinal_t>
 void FastIsotropicMedianFilterImpl(ReadViewPlanar<cardinal_t> input,
                                    float percentile, bool use_simd,
                                    WriteViewPlanar<cardinal_t> output) {
+#ifdef __AVX2__
+  static const bool use_avx_512 = internal::UseAvx512();
+  const int tile_width_alignment = use_avx_512 ? 16 : 16 / sizeof(ordinal_t);
+#else
   const int tile_width_alignment = 16 / sizeof(ordinal_t);
+#endif
   const int input_width = input.width();
   const int input_height = input.height();
   const int output_width = output.width();
