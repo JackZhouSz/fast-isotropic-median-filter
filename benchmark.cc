@@ -241,7 +241,7 @@ std::string CpuGeneration() {
     }
   } else if (vendor_str == "AuthenticAMD") {
     const std::map<uint32_t, std::string> amd_generations = {
-        {0x17, "Zen / Zen+"}, {0x19, "Zen 3 / Zen 4 / Zen 5"}};
+        {0x17, "Zen / Zen+"}, {0x19, "Zen 3 / Zen 4"}, {0x1A, "Zen 5"}};
 
     if (final_family == 0x19) {
       switch (final_model) {
@@ -279,22 +279,24 @@ std::string CpuGeneration() {
         case 0xA4:
           return "Zen 4 (Siena)";  // EPYC Edge/Telco
 
-        // --- Zen 5 ---
-        case 0x80:
-        case 0x81:
-          // Could be differentiated using L3 cache size here:
-          // Higher L3 -> Granite Ridge (Desktop)
-          // Lower L3  -> Strix Point (Mobile APU)
-          return "Zen 5 (Granite Ridge / Strix Point)";
-        case 0xC1:
-        case 0xC2:
-        case 0xC3:
-        case 0xC4:
-          return "Zen 5 (Turin)";  // EPYC Server
-
-        // Default for any unknown model in the family
+        // Default for any unknown model in this family
         default:
-          return "Unknown Zen Family 19h (Model: 0x" +
+          return "Unknown Zen 3/4 (Family: 0x19, Model: 0x" +
+                 std::to_string(final_model) + ")";
+      }
+    } else if (final_family == 0x1A) {
+      // The high nibble roughly correlates with the processor codename.
+      // TODO: bweiss - Refine this list as more details become available.
+      switch (final_model & 0xF0) {
+        // --- Zen 5 ---
+        case 0x40:
+          return "Zen 5 (Granite Ridge)";
+        case 0x80:
+          return "Zen 5 (Strix Point)";
+        case 0xC0:
+          return "Zen 5 (Turin)";
+        default:
+          return "Unknown Zen 5 (Family: 0x1A, Model: 0x" +
                  std::to_string(final_model) + ")";
       }
     }
@@ -412,20 +414,15 @@ int Benchmark(const std::string& input_filename, int radius_min, int radius_max,
   CsvLog(results, "# Radius range: min = %d, max = %d, step = %d\n", radius_min,
          radius_max, radius_step);
 
+  CsvLog(results, "# CPU = %s, Num Threads = %d\n", GetCpuName().c_str(),
+         num_threads);
 #if BENCHMARK_GPU
   const bool gpu_is_available = IsGpuAvailable();
   if (gpu_is_available) {
-    CsvLog(results, "# Num Threads = %d, CPU = %s,,,GPU = %s\n", num_threads,
-           GetCpuName().c_str(), GetGpuName().c_str());
+    CsvLog(results, "# GPU = %s\n", GetGpuName().c_str());
   } else {
-    CsvLog(results,
-           "# Num Threads = %d, CPU = %s,,,GPU = Not Available "
-           "(built for GPU but none found)\n",
-           num_threads, GetCpuName().c_str());
+    CsvLog(results, "# GPU = Not Available (built for GPU but none found)\n");
   }
-#else
-  CsvLog(results, "# Num Threads = %d, CPU = %s\n", num_threads,
-         GetCpuName().c_str());
 #endif
 
   // Extends the input image by 100 pixels on each side, repeating edge pixels.
@@ -730,8 +727,8 @@ int Benchmark(const std::string& input_filename, int radius_min, int radius_max,
           output_megapixels_cuda * iters / absl::ToDoubleSeconds(end - start);
 
       // Reads back result from GPU to validate against CPU implementation.
-      ImageGray<uint16_t> output16_cuda({output_width_cuda,
-                                         output_height_cuda});
+      ImageGray<uint16_t> output16_cuda(
+          {output_width_cuda, output_height_cuda});
       ImageGray<uint16_t> output16_cpu({output_width_cuda, output_height_cuda});
       status = output16_surface_cuda->Readback(output16_cuda.WriteView());
       if (!status.ok()) {
@@ -739,9 +736,9 @@ int Benchmark(const std::string& input_filename, int radius_min, int radius_max,
         break;
       }
       // Calls the CPU implementation.
-      status = FastIsotropicMedianFilter(ToPlanar(input16_cropped_cuda),
-                                         options,
-                                         ToPlanar(output16_cpu.WriteView()));
+      status =
+          FastIsotropicMedianFilter(ToPlanar(input16_cropped_cuda), options,
+                                    ToPlanar(output16_cpu.WriteView()));
       if (!status.ok()) {
         std::cerr << "Error running 16-bit CPU implementation: " << status
                   << std::endl;
@@ -798,8 +795,7 @@ int Benchmark(const std::string& input_filename, int radius_min, int radius_max,
           output_megapixels_cuda * iters / absl::ToDoubleSeconds(end - start);
 
       // Reads back result from GPU to validate against CPU implementation.
-      ImageGray<float> outputf_cuda({output_width_cuda,
-        output_height_cuda});
+      ImageGray<float> outputf_cuda({output_width_cuda, output_height_cuda});
       ImageGray<float> outputf_cpu({output_width_cuda, output_height_cuda});
       status = outputf_surface_cuda->Readback(outputf_cuda.WriteView());
       if (!status.ok()) {
@@ -807,8 +803,8 @@ int Benchmark(const std::string& input_filename, int radius_min, int radius_max,
         break;
       }
       // Calls the CPU implementation.
-      status = FastIsotropicMedianFilter(ToPlanar(inputf_cropped_cuda),
-          options, ToPlanar(outputf_cpu.WriteView()));
+      status = FastIsotropicMedianFilter(ToPlanar(inputf_cropped_cuda), options,
+                                         ToPlanar(outputf_cpu.WriteView()));
       if (!status.ok()) {
         std::cerr << "Error running float CPU implementation: " << status
                   << std::endl;

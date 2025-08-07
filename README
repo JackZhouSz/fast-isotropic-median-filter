@@ -61,7 +61,7 @@ considered 3 megapixels. It is also written to a .csv file. Example usage:
 ./bin/benchmark --input_filename=fractal_8192.jpg --radius_min=4 \
     --radius_max=100  --radius_step=4 --num_channels=1 --num_threads=16
 
-If run with BENCHMARK_GPU = 1 (in benchmark.cc), the CUDA GPU implementation
+If compiled for GPU, and if a compatible GPU is found, the GPU implementation
 will also be benchmarked (on a single channel only), and its output will be
 validated for correctness against the CPU implementation.
 
